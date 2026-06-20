@@ -1,159 +1,119 @@
 #!/usr/bin/env python3
-"""BTC chan backend — FastAPI server for charting_library frontend"""
-import sys, os
+"""BTC chan backend — FastAPI server (raw HTTP, no ccxt)"""
+import sys, os, json, time, requests
 
 print('>>> Starting BTC chan server...')
 
-for mod, pkg in [('fastapi', 'fastapi'), ('uvicorn', 'uvicorn'), ('ccxt', 'ccxt')]:
+for mod in [('fastapi', 'fastapi'), ('uvicorn', 'uvicorn'), ('requests', 'requests')]:
     try: __import__(mod)
     except ImportError:
-        print(f'ERROR: {mod} not installed. Run: pip install {pkg}')
+        print(f'ERROR: {mod} not installed. Run: pip install {mod}')
         sys.exit(1)
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional, List
 
 chan_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'chanpy')
 if not os.path.isdir(chan_path):
-    print(f'ERROR: chanpy not found: {chan_path}. Must run from project root.')
+    print(f'ERROR: chanpy not found: {chan_path}')
     sys.exit(1)
 sys.path.insert(0, chan_path)
 
-from Common.CEnum import KL_TYPE, DATA_SRC
+from Common.CEnum import KL_TYPE, DATA_SRC, DATA_FIELD
+from Common.CTime import CTime
+from KLine.KLine_Unit import CKLine_Unit
 from Chan import CChan
 from ChanConfig import CChanConfig
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-FREQ_MAP = {
-    "D": (KL_TYPE.K_DAY, "1d"), "1d": (KL_TYPE.K_DAY, "1d"),
-    "240": (KL_TYPE.K_60M, "4h"), "120": (KL_TYPE.K_60M, "2h"),
-    "60": (KL_TYPE.K_60M, "1h"), "60m": (KL_TYPE.K_60M, "1h"), "1h": (KL_TYPE.K_60M, "1h"),
-    "30": (KL_TYPE.K_30M, "30m"), "30m": (KL_TYPE.K_30M, "30m"),
-    "15": (KL_TYPE.K_15M, "15m"), "15m": (KL_TYPE.K_15M, "15m"),
-}
+TF_MAP = {"D": "1d", "1d": "1d", "60": "1h", "60m": "1h", "30": "30m", "30m": "30m", "15": "15m", "15m": "15m"}
+KL_MAP = {"D": KL_TYPE.K_DAY, "1d": KL_TYPE.K_DAY, "60": KL_TYPE.K_60M, "60m": KL_TYPE.K_60M, "30": KL_TYPE.K_30M, "30m": KL_TYPE.K_30M, "15": KL_TYPE.K_15M, "15m": KL_TYPE.K_15M}
 CACHE = {}
 
-def _get_chan(symbol, freq):
-    key = (symbol, freq)
-    if key in CACHE: return CACHE[key]
-    kl, _ = FREQ_MAP.get(freq, (KL_TYPE.K_DAY, "1d"))
-    chan = CChan(code=symbol, begin_time=None, end_time=None, data_src=DATA_SRC.CCXT, lv_list=[kl],
-        config=CChanConfig({"trigger_step": False, "divergence_rate": 0.7, "min_zs_cnt": 0, "bs_type": "1,2,3a,1p,2s,3b"}))
-    CACHE[key] = chan
-    return chan
+def fetch_binance(symbol, interval, limit):
+    """Raw Binance API — no ccxt market loading"""
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={limit}"
+    try:
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        return [{"t": int(d[0] // 1000), "o": float(d[1]), "h": float(d[2]), "l": float(d[3]), "c": float(d[4]), "v": float(d[5])} for d in data]
+    except Exception as e:
+        print(f"Binance API error: {e}")
+        return []
 
 @app.get("/api/health")
+@app.get("/health")
 def health(): return {"status": "ok"}
 
 @app.get("/api/bars")
 @app.get("/bars")
-def bars(symbol: str = "BTCUSDT", freq: str = "D", exchange: str = "BINANCE",
-        from_: str = Query(None, alias="from"), to_: str = Query(None, alias="to"), limit: int = 500):
-    import ccxt
-    ex = ccxt.binance({'options': {'defaultType': 'spot'}})
-    _, tf = FREQ_MAP.get(freq, (None, "1d"))
-    o = ex.fetch_ohlcv("BTC/USDT", tf, limit=limit)
-    return {"s": "ok", "bars": [{"t": i[0] // 1000, "o": i[1], "h": i[2], "l": i[3], "c": i[4], "v": i[5]} for i in o]}
+def bars(symbol: str = "BTCUSDT", freq: str = "D", limit: int = 500):
+    tf = TF_MAP.get(freq, "1d")
+    result = fetch_binance("BTCUSDT", tf, limit)
+    return {"s": "ok", "bars": result}
+
+def _get_chan(symbol, freq):
+    key = (symbol, freq)
+    if key in CACHE: return CACHE[key]
+    kl = KL_MAP.get(freq, KL_TYPE.K_DAY)
+    tf = TF_MAP.get(freq, "1d")
+    bars = fetch_binance("BTCUSDT", tf, 500)
+    klines = []
+    for b in bars:
+        t = b["t"]
+        dt = time.gmtime(t)
+        has_minute = tf != "1d"
+        if has_minute: ct = CTime(dt.tm_year, dt.tm_mon, dt.tm_mday, dt.tm_hour, dt.tm_min, auto=False)
+        else: ct = CTime(dt.tm_year, dt.tm_mon, dt.tm_mday, 0, 0, auto=True)
+        klines.append(CKLine_Unit({DATA_FIELD.FIELD_TIME: ct, DATA_FIELD.FIELD_OPEN: b["o"], DATA_FIELD.FIELD_HIGH: b["h"], DATA_FIELD.FIELD_LOW: b["l"], DATA_FIELD.FIELD_CLOSE: b["c"]}, autofix=True))
+    chan = CChan(code=symbol, begin_time=None, end_time=None, data_src=1, lv_list=[kl],
+        config=CChanConfig({"trigger_step": True, "divergence_rate": 0.7, "min_zs_cnt": 0, "bs_type": "1,2,3a,1p,2s,3b"}))
+    for klu in klines: chan.trigger_load({kl: [klu]})
+    CACHE[key] = chan
+    return chan
 
 @app.get("/api/chan")
 @app.get("/chan")
-def chan(symbol: str = "BTCUSDT", freq: str = "D", exchange: str = "BINANCE",
-        from_: str = Query(None, alias="from"), to_: str = Query(None, alias="to")):
+def chan(symbol: str = "BTCUSDT", freq: str = "D"):
     c = _get_chan("BTC/USDT", freq)[0]
-
-    # Build Bi list (frontend expects: idx, dir, t0, p0, t1, p1, sure, seg_idx)
+    import re
     bis = []
     for bi in c.bi_list:
-        b = {
-            "idx": bi.idx,
-            "dir": "UP" if bi.is_up else "DOWN",
-            "t0": bi.begin_klc.idx,
-            "p0": round(bi.get_begin_val(), 4),
-            "t1": bi.end_klc.idx,
-            "p1": round(bi.get_end_val(), 4),
-            "sure": bi.is_sure if hasattr(bi, "is_sure") else True,
-            "seg_idx": bi.seg_idx if hasattr(bi, "seg_idx") else None,
-        }
-        bis.append(b)
-
-    # Build Seg list
+        bis.append({"idx": bi.idx, "dir": "UP" if bi.is_up else "DOWN",
+            "t0": bi.begin_klc.idx, "p0": round(bi.get_begin_val(), 4),
+            "t1": bi.end_klc.idx, "p1": round(bi.get_end_val(), 4),
+            "sure": True, "seg_idx": bi.seg_idx if hasattr(bi, "seg_idx") else None})
     segs = []
     for i, seg in enumerate(c.seg_list):
-        s = {
-            "id": i,
-            "dir": "UP" if seg.is_up else "DOWN",
+        segs.append({"id": i, "dir": "UP" if seg.is_up else "DOWN",
             "t0": seg.start_bi.begin_klc.idx if hasattr(seg, "start_bi") and seg.start_bi else 0,
             "p0": round(seg.get_begin_val(), 4),
             "t1": seg.end_bi.end_klc.idx if hasattr(seg, "end_bi") and seg.end_bi else 0,
             "p1": round(seg.get_end_val(), 4),
-            "sure": seg.is_sure if hasattr(seg, "is_sure") else True,
-            "zs_count": len(seg.zs_lst) if hasattr(seg, "zs_lst") else 0,
-            "element_count": len(seg.bi_list) if hasattr(seg, "bi_list") else 0,
-        }
-        segs.append(s)
-
-    # Build Zs list
+            "sure": True, "zs_count": len(seg.zs_lst) if hasattr(seg, "zs_lst") else 0,
+            "element_count": len(seg.bi_list) if hasattr(seg, "bi_list") else 0})
     zs_list = []
     for zs in c.zs_list:
-        z = {
-            "idx": 0,
-            "dir": "UP" if zs.is_up() else "DOWN",
-            "t0": 0, "t1": 0,
-            "low": zs.low, "high": zs.high,
-            "peak_low": zs.low, "peak_high": zs.high,
-            "is_sure": zs.is_sure if hasattr(zs, "is_sure") else True,
-            "dir": "UP",
-            "sub_zs_count": 0, "element_count": 0,
-        }
-        zs_list.append(z)
-
-    # Build BSP list
+        zs_list.append({"idx": 0, "dir": "UP", "t0": 0, "t1": 0,
+            "low": zs.low, "high": zs.high, "peak_low": zs.low, "peak_high": zs.high,
+            "is_sure": True, "sub_zs_count": 0, "element_count": 0})
     bsps = []
     for bi in c.bi_list:
         if hasattr(bi, "bsp") and bi.bsp is not None:
-            b = bi.bsp
-            ts = 0
-            if b.klu and hasattr(b.klu, "time") and hasattr(b.klu.time, "ts"):
-                ts = b.klu.time.ts
-            import re
+            b = bi.bsp; ts = 0
+            if b.klu and hasattr(b.klu, "time") and hasattr(b.klu.time, "ts"): ts = b.klu.time.ts
             _types = re.findall(r"'([^']+)'", str(b.type)) if b.type else []
-            bsps.append({
-                "element_idx": bi.idx,
-                "klu_idx": b.klu.klc.idx if b.klu and hasattr(b.klu, "klc") else 0,
-                "t": ts,
-                "is_buy": b.is_buy,
-                "is_segbsp": False,
-                "is_target": True,
-                "types": _types,
-                "features": {},
-            })
-
-    return {
-        "symbol": symbol,
-        "freq": freq,
-        "bis": bis,
-        "segs": segs,
-        "zs": zs_list,
-        "segzs": [],
-        "bsps": bsps,
-        "seg_bsps": [],
-    }
+            bsps.append({"element_idx": bi.idx, "klu_idx": b.klu.klc.idx if b.klu and hasattr(b.klu, "klc") else 0,
+                "t": ts, "is_buy": b.is_buy, "is_segbsp": False, "is_target": True, "types": _types, "features": {}})
+    return {"symbol": symbol, "freq": freq, "bis": bis, "segs": segs, "zs": zs_list, "segzs": [], "bsps": bsps, "seg_bsps": []}
 
 @app.get("/api/chan/build")
-@app.get("/chan/build")
 def chan_build(symbol: str = "BTCUSDT", freq: str = "D"):
     _get_chan("BTC/USDT", freq)
     return {"status": "ok"}
-
-@app.get("/api/config")
-def config(exchange: str = "BINANCE"):
-    return {"contracts": [
-        {"symbol": "BTCUSDT", "name": "BTC/USDT", "price_scale": 2, "min_price_move": 0.01,
-         "session": "24x7", "exchange": "BINANCE", "supported_freqs": ["1m","5m","15m","30m","1h","1d"]}
-    ]}
 
 if __name__ == "__main__":
     print('>>> Running on http://0.0.0.0:3000')

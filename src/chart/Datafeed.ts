@@ -38,14 +38,9 @@ export function makeDatafeed() {
             supports_timescale_marks: false,
             supports_time: true,
             exchanges: [
-              { value: 'SHFE', name: '上期所', desc: 'SHFE' },
-              { value: 'DCE', name: '大商所', desc: 'DCE' },
-              { value: 'CZCE', name: '郑商所', desc: 'CZCE' },
-              { value: 'INE', name: '上海能源', desc: 'INE' },
-              { value: 'GFEX', name: '广期所', desc: 'GFEX' },
-              { value: 'CFFEX', name: '中金所', desc: 'CFFEX' },
+              { value: 'BINANCE', name: '币安', desc: 'Binance' },
             ],
-            symbols_types: [{ name: 'Futures', value: 'futures' }],
+            symbols_types: [{ name: 'Crypto', value: 'crypto' }],
           }),
         0,
       )
@@ -97,27 +92,19 @@ export function makeDatafeed() {
       setTimeout(() => {
         const cn = symbolNameCn(symbol)
         onResolve({
-          // name 显示在左上角 badge（小标签）。给中文便于识别。
           name: cn,
           ticker: `${exchange}:${symbol}`,
-          // description 显示在图表顶部「合约名称区」。
-          description: `${cn} 主力连续`,
-          type: 'futures',
-          // 国内期货周末不开盘，写 '24x7' 会让 TV 在周末也保留空位 → 日线 filled_area
-          // 中枢/段中枢在每个周末断一格。'0000-0000:23456' 表示 24h × 周一到周五。
-          // 数字 1=周日 2=周一 ... 7=周六。
-          session: '0000-0000:23456',
-          timezone: 'Asia/Shanghai',
+          description: `${cn} (${exchange})`,
+          type: 'crypto',
+          session: '24x7',
+          timezone: 'Etc/UTC',
           exchange,
           minmov: 1,
-          // 国内期货大多是整数价格变动（RB/HC=1, CU=10, AU=0.02 等），
-          // 这里给 1（无小数）足以满足 RB；后面可按品种区分
-          pricescale: 1,
+          pricescale: 100,  // BTC precision: 2 decimals
           has_intraday: true,
           visible_plots_set: 'ohlcv',
           supported_resolutions: SUPPORTED_RESOLUTIONS,
           volume_precision: 0,
-          // 'streaming' 是 TV 默认；'endofday' 会让 TV 认为仅日线，影响 intraday 显示
           data_status: 'streaming',
         })
       }, 0)

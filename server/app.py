@@ -78,20 +78,27 @@ def _get_chan(symbol, freq):
 @app.get("/api/chan")
 @app.get("/chan")
 def chan(symbol: str = "BTCUSDT", freq: str = "D"):
-    c = _get_chan("BTC/USDT", freq)[0]
+    chan_obj = _get_chan("BTC/USDT", freq)
+    c = chan_obj[0]
+    
+    # Build idx -> time mapping from original bars
+    bar_times = {}
+    for i, bar in enumerate(fetch_binance("BTCUSDT", TF_MAP.get(freq, "1d"), 500)):
+        bar_times[i] = bar["t"]
+    
     import re
     bis = []
     for bi in c.bi_list:
         bis.append({"idx": bi.idx, "dir": "UP" if bi.is_up else "DOWN",
-            "t0": bi.begin_klc.idx, "p0": round(bi.get_begin_val(), 4),
-            "t1": bi.end_klc.idx, "p1": round(bi.get_end_val(), 4),
+            "t0": bar_times.get(bi.begin_klc.idx, 0), "p0": round(bi.get_begin_val(), 4),
+            "t1": bar_times.get(bi.end_klc.idx, 0), "p1": round(bi.get_end_val(), 4),
             "sure": True, "seg_idx": bi.seg_idx if hasattr(bi, "seg_idx") else None})
     segs = []
     for i, seg in enumerate(c.seg_list):
         segs.append({"id": i, "dir": "UP" if seg.is_up else "DOWN",
-            "t0": seg.start_bi.begin_klc.idx if hasattr(seg, "start_bi") and seg.start_bi else 0,
+            "t0": bar_times.get(seg.start_bi.begin_klc.idx, 0) if hasattr(seg, "start_bi") and seg.start_bi else 0,
             "p0": round(seg.get_begin_val(), 4),
-            "t1": seg.end_bi.end_klc.idx if hasattr(seg, "end_bi") and seg.end_bi else 0,
+            "t1": bar_times.get(seg.end_bi.end_klc.idx, 0) if hasattr(seg, "end_bi") and seg.end_bi else 0,
             "p1": round(seg.get_end_val(), 4),
             "sure": True, "zs_count": len(seg.zs_lst) if hasattr(seg, "zs_lst") else 0,
             "element_count": len(seg.bi_list) if hasattr(seg, "bi_list") else 0})

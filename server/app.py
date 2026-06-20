@@ -100,7 +100,7 @@ def chan(symbol: str = "BTCUSDT", freq: str = "D", exchange: str = "BINANCE",
     for zs in c.zs_list:
         z = {
             "idx": 0,
-            "dir": "UP" if zs.is_up else "DOWN",
+            "dir": "UP" if zs.is_up() else "DOWN",
             "t0": 0, "t1": 0,
             "low": zs.low, "high": zs.high,
             "peak_low": zs.low, "peak_high": zs.high,

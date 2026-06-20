@@ -71,9 +71,12 @@ def bars(symbol: str = "BTCUSDT", freq: str = "D", exchange: str = "BINANCE",
 @app.get("/chan")
 def chan(symbol: str = "BTCUSDT", freq: str = "D", exchange: str = "BINANCE"):
     c = _get_chan("BTC/USDT", freq)[0]
-    bars, pens, segs, zs_list, bsp_list = [], [], [], [], []
+    bars = []
     for k in c:
-        bars.append({"time": k.idx, "open": k.open, "high": k.high, "low": k.low, "close": k.close, "volume": 0})
+        for klu in k.lst:
+            bars.append({"t": klu.time.ts if hasattr(klu.time,'ts') else str(klu.time),
+                "o": klu.open, "h": klu.high, "l": klu.low, "c": klu.close, "v": klu.volume if hasattr(klu,'volume') else 0})
+    pens, segs, zs_list, bsp_list = [], [], [], []
     for bi in c.bi_list:
         pens.append({"start_idx": bi.begin_klc.idx, "end_idx": bi.end_klc.idx,
             "start_price": round(bi.get_begin_val(), 4), "end_price": round(bi.get_end_val(), 4),

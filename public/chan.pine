@@ -1,0 +1,205 @@
+//@version=5
+// ═══════════════════════════════════════
+// 缠论指标 — 笔/段/中枢/BSP买卖点
+// 参考: Vespa314/chan.py
+// ═══════════════════════════════════════
+indicator("Chan 缠论", overlay=true, max_lines_count=500, max_boxes_count=200, max_labels_count=100)
+
+// ── 1. 包含关系合并K线 ──
+var float[]  merged_high = array.new_float(0)
+var float[]  merged_low  = array.new_float(0)
+var int[]    merged_time = array.new_int(0)
+
+// ── 2. 分型检测 ──
+type Fractal
+    int   idx
+    float price
+    bool  is_top  // true=顶, false=底
+
+var Fractal[] fractals = array.new<Fractal>()
+
+// ── 3. 笔 ──
+type Bi
+    int   start_idx
+    float start_price
+    int   end_idx
+    float end_price
+    bool  is_up
+
+var Bi[] bis = array.new<Bi>()
+
+// ── 4. 段 ──
+type Seg
+    int   start_idx
+    float start_price
+    int   end_idx
+    float end_price
+    bool  is_up
+
+var Seg[] segs = array.new<Seg>()
+
+// ── 5. 中枢 ──
+type ZS
+    int   start_idx
+    int   end_idx
+    float high
+    float low
+
+var ZS[] zhongshu = array.new<ZS>()
+
+// ── Constants ──
+MERGE_N = 5  // 包含合并回溯数
+
+// ═══════════════════════════════════════
+// 分型检测 (每根K线实时)
+// ═══════════════════════════════════════
+is_top_fractal = high[2] < high[1] and high[1] > high and
+                 low[2]  < low[1]  and low[1]  > low
+
+is_bot_fractal = high[2] > high[1] and high[1] < high and
+                 low[2]  > low[1]  and low[1]  < low
+
+// ── 存储分型 ──
+var int  last_fx_idx   = 0
+var bool last_fx_is_top = true
+
+if is_top_fractal or is_bot_fractal
+    Fractal f = Fractal.new()
+    f.idx    = bar_index
+    f.price  = is_top_fractal ? high[1] : low[1]
+    f.is_top = is_top_fractal
+    
+    // 过滤连续同向分型
+    if array.size(fractals) > 0
+        Fractal last = array.last(fractals)
+        if last.is_top == f.is_top
+            // 顶：取更高；底：取更低
+            if (f.is_top and f.price > last.price) or (not f.is_top and f.price < last.price)
+                array.pop(fractals)
+                array.push(fractals, f)
+        else
+            array.push(fractals, f)
+    else
+        array.push(fractals, f)
+
+// ═══════════════════════════════════════
+// 画笔 (Bi)
+// ═══════════════════════════════════════
+if array.size(fractals) >= 2
+    Fractal f0 = array.get(fractals, array.size(fractals) - 2)
+    Fractal f1 = array.get(fractals, array.size(fractals) - 1)
+    
+    // 只有当分型交替时（顶/底/顶/底）才构成笔
+    if f0.is_top != f1.is_top
+        Bi b = Bi.new()
+        b.start_idx   = f0.idx
+        b.start_price = f0.price
+        b.end_idx     = f1.idx
+        b.end_price   = f1.price
+        b.is_up       = not f0.is_top  // 底→顶=向上笔
+        
+        // 去重
+        bool add_bi = true
+        if array.size(bis) > 0
+            Bi last = array.last(bis)
+            if last.start_idx == b.start_idx and last.end_idx == b.end_idx
+                add_bi := false
+        if add_bi
+            array.push(bis, b)
+
+// ── 画笔线 ──
+for i = 0 to array.size(bis) - 1
+    Bi b = array.get(bis, i)
+    line.new(b.start_idx, b.start_price, b.end_idx, b.end_price,
+             color=b.is_up ? color.lime : color.red, width=1, style=line.style_solid)
+
+// ═══════════════════════════════════════
+// 画段 (Seg) — 至少3笔构成一段
+// ═══════════════════════════════════════
+if array.size(bis) >= 3
+    Bi b0 = array.get(bis, array.size(bis) - 3)
+    Bi b1 = array.get(bis, array.size(bis) - 2)
+    Bi b2 = array.get(bis, array.size(bis) - 1)
+    
+    // 三笔方向：UP-DOWN-UP 或 DOWN-UP-DOWN → 才能构成段
+    if b1.is_up != b2.is_up  // 中间笔和最后一笔反向
+        Seg s = Seg.new()
+        s.start_idx   = b0.start_idx
+        s.start_price = b0.start_price
+        s.end_idx     = b2.end_idx
+        s.end_price   = b2.end_price
+        s.is_up       = b2.end_price > b0.start_price
+        
+        bool add_seg = true
+        if array.size(segs) > 0
+            Seg last = array.last(segs)
+            if last.start_idx == s.start_idx
+                add_seg := false
+        if add_seg
+            array.push(segs, s)
+
+// ── 画段线 ──
+for i = 0 to array.size(segs) - 1
+    Seg s = array.get(segs, i)
+    line.new(s.start_idx, s.start_price, s.end_idx, s.end_price,
+             color=color.purple, width=2, style=line.style_solid)
+
+// ═══════════════════════════════════════
+// 画中枢 — 三段重叠区间
+// ═══════════════════════════════════════
+if array.size(segs) >= 3
+    Seg s0 = array.get(segs, array.size(segs) - 3)
+    Seg s1 = array.get(segs, array.size(segs) - 2)
+    Seg s2 = array.get(segs, array.size(segs) - 1)
+    
+    float zh_high = math.min(math.max(s0.start_price, s0.end_price),
+                              math.max(s1.start_price, s1.end_price),
+                              math.max(s2.start_price, s2.end_price))
+    float zh_low  = math.max(math.min(s0.start_price, s0.end_price),
+                              math.min(s1.start_price, s1.end_price),
+                              math.min(s2.start_price, s2.end_price))
+    
+    if zh_high > zh_low
+        ZS z = ZS.new()
+        z.start_idx = s0.start_idx
+        z.end_idx   = s2.end_idx
+        z.high      = zh_high
+        z.low       = zh_low
+        
+        bool add_zs = true
+        if array.size(zhongshu) > 0
+            ZS last = array.last(zhongshu)
+            if last.start_idx == z.start_idx
+                add_zs := false
+        if add_zs
+            array.push(zhongshu, z)
+
+// ── 画中枢矩形 ──
+for i = 0 to array.size(zhongshu) - 1
+    ZS z = array.get(zhongshu, i)
+    box.new(z.start_idx, z.high, z.end_idx, z.low,
+            bgcolor=color.new(color.gray, 90), border_color=color.gray, border_width=1)
+
+// ═══════════════════════════════════════
+// BSP 买卖点标记
+// ═══════════════════════════════════════
+if array.size(segs) >= 1
+    Seg last_seg = array.last(segs)
+    
+    // 一买：最后一个下降段结束，底分型确认
+    if not last_seg.is_up and array.size(bis) >= 2
+        Bi last_bi  = array.last(bis)
+        Bi prev_bi  = array.get(bis, array.size(bis) - 2)
+        if last_bi.is_up and prev_bi.is_up == false
+            label.new(last_bi.start_idx, last_bi.start_price,
+                      text="Buy1", color=color.green, textcolor=color.white,
+                      style=label.style_label_up, size=size.small)
+    
+    // 一卖：最后一个上升段结束，顶分型确认
+    if last_seg.is_up and array.size(bis) >= 2
+        Bi last_bi  = array.last(bis)
+        Bi prev_bi  = array.get(bis, array.size(bis) - 2)
+        if not last_bi.is_up and prev_bi.is_up
+            label.new(last_bi.start_idx, last_bi.start_price,
+                      text="Sell1", color=color.red, textcolor=color.white,
+                      style=label.style_label_down, size=size.small)

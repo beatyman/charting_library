@@ -1,73 +1,50 @@
-# React + TypeScript + Vite
+# BTC 缠论多级别区间套 TradingView 看盘系统
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+4 级别 2×2 布局 + 缠论指标（笔/段/中枢/BSP）+ Python 后端实时计算。
 
-Currently, two official plugins are available:
+## 快速启动
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+# 1. 安装后端依赖
+pip install fastapi uvicorn ccxt
 
-## React Compiler
+# 2. 启动 Python 后端 (:3000)
+python3 server/app.py
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+# 3. 安装前端依赖并启动
+npm install
+npm run dev
+# → http://localhost:5173
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## 架构
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+```
+浏览器 2×2 Grid                  Python 后端 :3000
+┌────日线────┬────1H────┐         server/app.py
+│  TradingView + 缠论指标 │  ←──→  chanpy/ (chan.py)
+├────30m─────┬────15m───┤         CCXT → Binance BTC
+└────────────┴──────────┘
+```
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+## API 端点
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/health` | 健康检查 |
+| `GET /api/bars?s=...&freq=...` | K 线数据 |
+| `GET /api/chan?s=...&freq=...` | 缠论结构（笔/段/中枢/BSP） |
+
+## 零外部依赖
+
+- 前端：Vite + React + TradingView (charting_library 内嵌)
+- 后端：仅需 `pip install fastapi uvicorn ccxt`
+- 缠论引擎：chanpy/ (Vespa314/chan.py，内嵌)
+- 数据源：Binance 公开 API（无需 API Key）
+
+## 开发
+
+```bash
+npm run build    # 生产构建 → dist/
+npm run preview  # 预览生产构建
 ```

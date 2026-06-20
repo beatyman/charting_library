@@ -64,8 +64,8 @@ def bars(symbol: str = "BTCUSDT", freq: str = "D", exchange: str = "BINANCE",
     ex = ccxt.binance({'options': {'defaultType': 'spot'}})
     _, tf = FREQ_MAP.get(freq, (None, "1d"))
     o = ex.fetch_ohlcv("BTC/USDT", tf, limit=limit)
-    result = [{"time": i[0] // 1000, "open": i[1], "high": i[2], "low": i[3], "close": i[4], "volume": i[5]} for i in o]
-    return result
+    result = [{"t": i[0] // 1000, "o": i[1], "h": i[2], "l": i[3], "c": i[4], "v": i[5]} for i in o]
+    return {"s": "ok", "bars": result}
 
 @app.get("/api/chan")
 @app.get("/chan")

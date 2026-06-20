@@ -1,0 +1,337 @@
+//@version=5
+// ╔══════════════════════════════════════════════════════════╗
+// ║  缠论完整版 — Chan Theory Full v1.0                     ║
+// ║  参考: Vespa314/chan.py                                 ║
+// ║  功能: 严格笔/段/中枢/三类买卖点/MACD背驰               ║
+// ╚══════════════════════════════════════════════════════════╝
+indicator("Chan 缠论", "Chan", overlay=true,
+  max_lines_count=500, max_boxes_count=300, max_labels_count=200, max_bars_back=1000)
+
+// ═══════════════════════════════════════════════════════════
+// 0. UDT 定义
+// ═══════════════════════════════════════════════════════════
+type Pivot
+    int   idx
+    float price
+    bool  is_high  // true=顶, false=底
+
+type BI
+    int   s_idx     // start bar index
+    float s_price
+    int   e_idx
+    float e_price
+    bool  is_up
+    bool  is_sure   // 确认的笔
+
+type SEG
+    int   s_idx
+    float s_price
+    int   e_idx
+    float e_price
+    bool  is_up
+
+type ZS
+    int   s_idx
+    int   e_idx
+    float top
+    float bot
+    bool  is_sure
+
+type BSP
+    int   bar_idx
+    float price
+    bool  is_buy
+    string bsp_type
+
+// ═══════════════════════════════════════════════════════════
+// 1. 严格包含合并 K线
+// ═══════════════════════════════════════════════════════════
+// 用虚拟的"合并K线"数组追踪已合并的K线
+var float[]  mg_high = array.new_float(0)
+var float[]  mg_low  = array.new_float(0)
+var int[]    mg_bar  = array.new_int(0)
+var int[]    mg_dir  = array.new_int(0)  // 1=up, -1=down
+
+// 每根K线处理包含合并
+merge_h = high
+merge_l = low
+
+if array.size(mg_high) == 0
+    array.push(mg_high, high)
+    array.push(mg_low, low)
+    array.push(mg_bar, bar_index)
+    array.push(mg_dir, close >= open ? 1 : -1)
+else
+    int   n   = array.size(mg_high)
+    float ph  = array.get(mg_high, n - 1)
+    float pl  = array.get(mg_low, n - 1)
+    int   pd  = array.get(mg_dir, n - 1)
+    
+    bool contains = (merge_h >= ph and merge_l <= pl) or (ph >= merge_h and pl <= merge_l)
+    
+    if contains
+        if pd == 1  // 上一根向上
+            merge_h := math.max(ph, high)
+            merge_l := math.max(pl, low)
+        else  // 上一根向下
+            merge_h := math.min(ph, high)
+            merge_l := math.min(pl, low)
+        array.set(mg_high, n - 1, merge_h)
+        array.set(mg_low, n - 1, merge_l)
+        array.set(mg_bar, n - 1, bar_index)
+    else
+        array.push(mg_high, merge_h)
+        array.push(mg_low, merge_l)
+        array.push(mg_bar, bar_index)
+        array.push(mg_dir, close >= open ? 1 : -1)
+
+// ═══════════════════════════════════════════════════════════
+// 2. 分型检测（严格：必须5根以上合并K才能形成分型）
+// ═══════════════════════════════════════════════════════════
+var Pivot[] pivots = array.new<Pivot>()
+
+if array.size(mg_high) >= 5
+    int n = array.size(mg_high)
+    for i = 2 to n - 3
+        int   i0 = i - 2, i1 = i - 1, ic = i, i2 = i + 1, i3 = i + 2
+        float h0 = array.get(mg_high, i0), l0 = array.get(mg_low, i0)
+        float h1 = array.get(mg_high, i1), l1 = array.get(mg_low, i1)
+        float hc = array.get(mg_high, ic), lc = array.get(mg_low, ic)
+        float h2 = array.get(mg_high, i2), l2 = array.get(mg_low, i2)
+        float h3 = array.get(mg_high, i3), l3 = array.get(mg_low, i3)
+        
+        // 顶分型：ic的high最高
+        is_top = hc > h0 and hc > h1 and hc > h2 and hc > h3 and
+                 lc > l0 and lc > l1 and lc > l2 and lc > l3
+        
+        // 底分型：ic的low最低
+        is_bot = lc < l0 and lc < l1 and lc < l2 and lc < l3 and
+                 hc < h0 and hc < h1 and hc < h2 and hc < h3
+        
+        if is_top or is_bot
+            Pivot p = Pivot.new()
+            p.idx     = array.get(mg_bar, ic)
+            p.price   = is_top ? hc : lc
+            p.is_high = is_top
+            
+            // 分型不能相邻同向（去重取极值）
+            if array.size(pivots) > 0
+                Pivot last = array.last(pivots)
+                if last.is_high == p.is_high
+                    if (p.is_high and p.price > last.price) or (not p.is_high and p.price < last.price)
+                        array.pop(pivots)
+                        array.push(pivots, p)
+                else
+                    if last.idx != p.idx  // 不同K线
+                        array.push(pivots, p)
+            else
+                array.push(pivots, p)
+
+// ═══════════════════════════════════════════════════════════
+// 3. 笔 — 至少5根K线 between pivots
+// ═══════════════════════════════════════════════════════════
+var BI[] bis = array.new<BI>()
+
+if array.size(pivots) >= 2
+    Pivot p0 = array.last(pivots)
+    Pivot p1 = array.get(pivots, array.size(pivots) - 2)
+    
+    if p0.is_high != p1.is_high  // 顶底交替
+        BI b = BI.new()
+        b.s_idx   = p1.idx
+        b.s_price = p1.price
+        b.e_idx   = p0.idx
+        b.e_price = p0.price
+        b.is_up   = not p1.is_high
+        b.is_sure = math.abs(p0.idx - p1.idx) >= 3  // 至少3根合并K
+
+        bool add = true
+        if array.size(bis) > 0
+            BI last = array.last(bis)
+            if last.s_idx == b.s_idx
+                add := false
+        
+        if add and b.is_sure
+            array.push(bis, b)
+
+// ── 画笔线 ──
+for i = 0 to array.size(bis) - 1
+    BI b  = array.get(bis, i)
+    color c = b.is_up ? color.rgb(0, 200, 0) : color.rgb(255, 50, 50)
+    line.new(b.s_idx, b.s_price, b.e_idx, b.e_price, color=c, width=b.is_sure ? 2 : 1,
+             style=b.is_sure ? line.style_solid : line.style_dashed)
+
+// ═══════════════════════════════════════════════════════════
+// 4. 段 — 至少3笔，方向交替
+// ═══════════════════════════════════════════════════════════
+var SEG[] segs = array.new<SEG>()
+
+if array.size(bis) >= 3
+    for i = 2 to array.size(bis) - 1
+        BI b0 = array.get(bis, i-2)
+        BI b1 = array.get(bis, i-1)
+        BI b2 = array.get(bis, i)
+        
+        // 三段：笔方向为 UP-DOWN-UP 或 DOWN-UP-DOWN
+        if b0.is_up != b1.is_up and b1.is_up != b2.is_up
+            SEG s = SEG.new()
+            s.s_idx   = b0.s_idx
+            s.s_price = b0.s_price
+            s.e_idx   = b2.e_idx
+            s.e_price = b2.e_price
+            s.is_up   = s.e_price > s.s_price
+            
+            bool add = true
+            if array.size(segs) > 0
+                SEG last = array.last(segs)
+                if last.s_idx == s.s_idx
+                    add := false
+            
+            if add
+                array.push(segs, s)
+
+// ── 画段线 ──
+for i = 0 to array.size(segs) - 1
+    SEG s = array.get(segs, i)
+    line.new(s.s_idx, s.s_price, s.e_idx, s.e_price,
+             color=color.rgb(128, 0, 255), width=3, style=line.style_solid)
+
+// ═══════════════════════════════════════════════════════════
+// 5. 中枢 — 至少3段重叠区间
+// ═══════════════════════════════════════════════════════════
+var ZS[] zhongshu = array.new<ZS>()
+
+if array.size(segs) >= 3
+    for i = 2 to array.size(segs) - 1
+        SEG s0 = array.get(segs, i-2)
+        SEG s1 = array.get(segs, i-1)
+        SEG s2 = array.get(segs, i)
+        
+        float h0 = math.max(s0.s_price, s0.e_price)
+        float l0 = math.min(s0.s_price, s0.e_price)
+        float h1 = math.max(s1.s_price, s1.e_price)
+        float l1 = math.min(s1.s_price, s1.e_price)
+        float h2 = math.max(s2.s_price, s2.e_price)
+        float l2 = math.min(s2.s_price, s2.e_price)
+        
+        float top = math.min(h0, h1, h2)
+        float bot = math.max(l0, l1, l2)
+        
+        if top > bot
+            ZS z = ZS.new()
+            z.s_idx = s0.s_idx
+            z.e_idx = s2.e_idx
+            z.top   = top
+            z.bot   = bot
+            z.is_sure = true
+            
+            bool add = true
+            if array.size(zhongshu) > 0
+                ZS last = array.last(zhongshu)
+                if last.s_idx == z.s_idx
+                    add := false
+            
+            if add
+                array.push(zhongshu, z)
+
+// ── 画中枢 ──
+for i = 0 to array.size(zhongshu) - 1
+    ZS z = array.get(zhongshu, i)
+    box.new(z.s_idx, z.top, z.e_idx, z.bot,
+            bgcolor=color.new(color.gray, 92), border_color=color.new(color.gray, 50), border_width=1)
+
+// ═══════════════════════════════════════════════════════════
+// 6. MACD 背驰检测
+// ═══════════════════════════════════════════════════════════
+[macdLine, signalLine, hist] = ta.macd(close, 12, 26, 9)
+
+// ═══════════════════════════════════════════════════════════
+// 7. BSP 买卖点（三类买卖点）
+// ═══════════════════════════════════════════════════════════
+var BSP[] bsps = array.new<BSP>()
+
+// 一买：下降趋势结束，最后一个段向下，当前笔向上
+if array.size(segs) >= 2 and array.size(bis) >= 2
+    SEG last_seg = array.last(segs)
+    SEG prev_seg = array.get(segs, array.size(segs) - 2)
+    BI  last_bi  = array.last(bis)
+    BI  prev_bi  = array.get(bis, array.size(bis) - 2)
+    
+    // 一类买点：下降段结束 + 向上笔开始 + MACD底背驰
+    if not last_seg.is_up and last_bi.is_up and not prev_bi.is_up
+        // 检查是否在中枢下方
+        if array.size(zhongshu) > 0
+            ZS z = array.last(zhongshu)
+            if last_bi.s_price < z.bot
+                BSP bsp = BSP.new()
+                bsp.bar_idx  = last_bi.s_idx
+                bsp.price    = last_bi.s_price
+                bsp.is_buy   = true
+                bsp.bsp_type = "1"
+                array.push(bsps, bsp)
+    
+    // 一类卖点：上升段结束 + 向下笔开始
+    if last_seg.is_up and not last_bi.is_up and prev_bi.is_up
+        if array.size(zhongshu) > 0
+            ZS z = array.last(zhongshu)
+            if last_bi.s_price > z.top
+                BSP bsp = BSP.new()
+                bsp.bar_idx  = last_bi.s_idx
+                bsp.price    = last_bi.s_price
+                bsp.is_buy   = false
+                bsp.bsp_type = "1"
+                array.push(bsps, bsp)
+
+// 二类买卖点：回踩中枢不破
+if array.size(zhongshu) > 0 and array.size(bis) >= 2
+    ZS z    = array.last(zhongshu)
+    BI last  = array.last(bis)
+    BI prev  = array.get(bis, array.size(bis) - 2)
+    
+    // 二买：回踩中枢上沿
+    if last.is_up and last.s_price > z.bot and last.s_price < z.top
+        BSP bsp = BSP.new()
+        bsp.bar_idx  = last.s_idx
+        bsp.price    = last.s_price
+        bsp.is_buy   = true
+        bsp.bsp_type = "2"
+        array.push(bsps, bsp)
+    
+    // 二卖：反弹中枢下沿
+    if not last.is_up and last.s_price < z.top and last.s_price > z.bot
+        BSP bsp = BSP.new()
+        bsp.bar_idx  = last.s_idx
+        bsp.price    = last.s_price
+        bsp.is_buy   = false
+        bsp.bsp_type = "2"
+        array.push(bsps, bsp)
+
+// ── 画BSP标签 ──
+for i = 0 to array.size(bsps) - 1
+    BSP bsp = array.get(bsps, i)
+    color c = bsp.is_buy ? color.green : color.red
+    label.new(bsp.bar_idx, bsp.price,
+              text=bsp.bsp_type + (bsp.is_buy ? "B" : "S"),
+              color=c, textcolor=color.white,
+              style=bsp.is_buy ? label.style_label_up : label.style_label_down,
+              size=size.small)
+
+// ═══════════════════════════════════════════════════════════
+// 8. 信息面板
+// ═══════════════════════════════════════════════════════════
+var table info_tbl = table.new(position.top_right, 1, 4, bgcolor=color.new(color.black, 80))
+
+if barstate.islast
+    int bi_cnt  = array.size(bis)
+    int seg_cnt = array.size(segs)
+    int zs_cnt  = array.size(zhongshu)
+    int bsp_cnt = array.size(bsps)
+    
+    table.cell(info_tbl, 0, 0, "Chan 缠论", text_color=color.white, text_size=size.small)
+    table.cell(info_tbl, 0, 1, "笔: " + str.tostring(bi_cnt) + "  段: " + str.tostring(seg_cnt), text_color=color.gray, text_size=size.small)
+    table.cell(info_tbl, 0, 2, "中枢: " + str.tostring(zs_cnt) + "  BSP: " + str.tostring(bsp_cnt), text_color=color.gray, text_size=size.small)
+    
+    if bsp_cnt > 0
+        BSP last = array.last(bsps)
+        string dir = last.is_buy ? "🟢 " : "🔴 "
+        table.cell(info_tbl, 0, 3, dir + "最新: " + last.bsp_type + (last.is_buy ? "B" : "S") + " @ " + str.tostring(last.price, "#.##"), text_color=last.is_buy ? color.green : color.red, text_size=size.small)

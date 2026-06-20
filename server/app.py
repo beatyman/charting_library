@@ -61,7 +61,7 @@ def bars(symbol: str = "BTCUSDT", freq: str = "D", exchange: str = "BINANCE",
         from_: str = Query(None, alias="from"), to_: str = Query(None, alias="to"),
         limit: int = 500):
     import ccxt
-    ex = ccxt.binance()
+    ex = ccxt.binance({'options': {'defaultType': 'spot'}})
     _, tf = FREQ_MAP.get(freq, (None, "1d"))
     o = ex.fetch_ohlcv("BTC/USDT", tf, limit=limit)
     result = [{"time": i[0] // 1000, "open": i[1], "high": i[2], "low": i[3], "close": i[4], "volume": i[5]} for i in o]

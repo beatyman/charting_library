@@ -4,7 +4,7 @@ import sys, os, json, time, requests
 
 print('>>> Starting BTC chan server...')
 
-for mod in [('fastapi', 'fastapi'), ('uvicorn', 'uvicorn'), ('requests', 'requests')]:
+for mod in ['fastapi', 'uvicorn', 'requests']:
     try: __import__(mod)
     except ImportError:
         print(f'ERROR: {mod} not installed. Run: pip install {mod}')

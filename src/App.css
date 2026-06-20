@@ -1,16 +1,26 @@
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 html, body, #root {
   height: 100%;
   margin: 0;
-  background: #ffffff;
-  color: #131722;
+  background: #131722;
+  color: #d1d4dc;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
-.app {
+.multi-chart-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
   height: 100vh;
   width: 100vw;
+  gap: 2px;
+  background: #2a2e39;
+}
+
+.chart-cell {
+  overflow: hidden;
+  background: #131722;
 }

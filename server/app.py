@@ -118,6 +118,8 @@ def chan(symbol: str = "BTCUSDT", freq: str = "D", exchange: str = "BINANCE",
             ts = 0
             if b.klu and hasattr(b.klu, "time") and hasattr(b.klu.time, "ts"):
                 ts = b.klu.time.ts
+            import re
+            _types = re.findall(r"'([^']+)'", str(b.type)) if b.type else []
             bsps.append({
                 "element_idx": bi.idx,
                 "klu_idx": b.klu.klc.idx if b.klu and hasattr(b.klu, "klc") else 0,
@@ -125,7 +127,7 @@ def chan(symbol: str = "BTCUSDT", freq: str = "D", exchange: str = "BINANCE",
                 "is_buy": b.is_buy,
                 "is_segbsp": False,
                 "is_target": True,
-                import re; _t=re.findall(r"'([^']+)'",str(b.type)); "types": _t if _t else [],
+                "types": _types,
                 "features": {},
             })
 

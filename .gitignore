@@ -22,3 +22,4 @@ __pycache__/
 !.vscode/extensions.json
 yarn-debug.log*
 yarn-error.log*
+chanpy/Image/

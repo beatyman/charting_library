@@ -84,7 +84,7 @@ def chan(symbol: str = "BTCUSDT", freq: str = "D"):
     # Build idx -> time mapping from original bars
     bar_times = {}
     for i, bar in enumerate(fetch_binance("BTCUSDT", TF_MAP.get(freq, "1d"), 500)):
-        bar_times[i] = bar["t"]
+        bar_times[i] = bar["t"] * 1000  # 前端用毫秒
     
     import re
     bis = []

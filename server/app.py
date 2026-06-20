@@ -100,11 +100,12 @@ def chan(symbol: str = "BTCUSDT", freq: str = "D", exchange: str = "BINANCE",
     for zs in c.zs_list:
         z = {
             "idx": 0,
-            "dir": "UP",
+            "dir": "UP" if zs.is_up else "DOWN",
             "t0": 0, "t1": 0,
             "low": zs.low, "high": zs.high,
             "peak_low": zs.low, "peak_high": zs.high,
             "is_sure": zs.is_sure if hasattr(zs, "is_sure") else True,
+            "dir": "UP",
             "sub_zs_count": 0, "element_count": 0,
         }
         zs_list.append(z)
@@ -124,7 +125,7 @@ def chan(symbol: str = "BTCUSDT", freq: str = "D", exchange: str = "BINANCE",
                 "is_buy": b.is_buy,
                 "is_segbsp": False,
                 "is_target": True,
-                "types": [str(b.type)] if b.type else [],
+                import re; _t=re.findall(r"'([^']+)'",str(b.type)); "types": _t if _t else [],
                 "features": {},
             })
 
